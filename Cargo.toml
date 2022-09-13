@@ -1,0 +1,11 @@
+[package]
+name = "access-log-gen"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "e1f8ed8f894e71e58423f1fa776b03072bdb3f39" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "e1f8ed8f894e71e58423f1fa776b03072bdb3f39" }
+rand = "0.8"
