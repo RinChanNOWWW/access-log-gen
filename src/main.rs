@@ -3,7 +3,9 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
+use parquet::file::reader::SerializedPageReader;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::fs::File;
@@ -206,11 +208,43 @@ impl Iterator for Generator {
 fn main() {
     let generator = Generator::new();
 
-    let file = File::create("logs.parquet").unwrap();
-    let mut writer = ArrowWriter::try_new(file, generator.schema.clone(), None).unwrap();
+    let mut file = File::create("logs.parquet").unwrap();
+    let mut writer = ArrowWriter::try_new(&mut file, generator.schema.clone(), None).unwrap();
 
     for batch in generator.take(40) {
         writer.write(&batch).unwrap();
     }
     writer.close().unwrap();
+
+    let file = File::open("logs.parquet").unwrap();
+
+    let options = ArrowReaderOptions::new().with_page_index(true);
+    let reader =
+        ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)
+            .unwrap();
+
+    let chunk_reader = Arc::new(file);
+    for (r_idx, row_group) in reader.metadata().row_groups().iter().enumerate() {
+        for (c_idx, column) in row_group.columns().iter().enumerate() {
+            let page_reader = SerializedPageReader::new(
+                Arc::clone(&chunk_reader),
+                column,
+                row_group.num_rows() as usize,
+                None,
+            )
+            .unwrap();
+            for (p_idx, page) in page_reader.enumerate() {
+                let p = page.unwrap();
+                println!(
+                    "{}:{}:{} Page({},{},{})",
+                    r_idx,
+                    c_idx,
+                    p_idx,
+                    p.page_type(),
+                    p.encoding(),
+                    p.buffer().len()
+                );
+            }
+        }
+    }
 }

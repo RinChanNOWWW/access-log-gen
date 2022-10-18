@@ -6,6 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "e1f8ed8f894e71e58423f1fa776b03072bdb3f39" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "e1f8ed8f894e71e58423f1fa776b03072bdb3f39" }
+arrow = { git = "https://github.com/tustvold/arrow-rs.git", rev = "95a5eb8204d13a7c7c7ff2fc0abfbca5c4dbb0c9" }
+parquet = { git = "https://github.com/tustvold/arrow-rs.git", rev = "95a5eb8204d13a7c7c7ff2fc0abfbca5c4dbb0c9" }
 rand = "0.8"
