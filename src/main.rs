@@ -1,10 +1,12 @@
 use arrow::array::{
-    Int32Builder, StringBuilder, StringDictionaryBuilder, TimestampNanosecondBuilder, UInt16Builder,
+    Int32Builder, StringBuilder, StringDictionaryBuilder, TimestampMicrosecondBuilder,
+    TimestampNanosecondBuilder, UInt16Builder,
 };
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
+use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterPropertiesBuilder};
 use parquet::file::reader::SerializedPageReader;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -14,12 +16,12 @@ use std::sync::Arc;
 
 #[derive(Default)]
 struct BatchBuilder {
-    service: StringDictionaryBuilder<Int32Type>,
-    host: StringDictionaryBuilder<Int32Type>,
-    pod: StringDictionaryBuilder<Int32Type>,
-    container: StringDictionaryBuilder<Int32Type>,
-    image: StringDictionaryBuilder<Int32Type>,
-    time: TimestampNanosecondBuilder,
+    service: StringBuilder,
+    host: StringBuilder,
+    pod: StringBuilder,
+    container: StringBuilder,
+    image: StringBuilder,
+    time: TimestampMicrosecondBuilder,
     client_addr: StringBuilder,
     request_duration: Int32Builder,
     request_user_agent: StringBuilder,
@@ -32,18 +34,18 @@ struct BatchBuilder {
 
 impl BatchBuilder {
     fn schema() -> SchemaRef {
-        let utf8_dict =
-            || DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        // let utf8_dict =
+        //     || DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
 
         Arc::new(Schema::new(vec![
-            Field::new("service", utf8_dict(), true),
-            Field::new("host", utf8_dict(), false),
-            Field::new("pod", utf8_dict(), false),
-            Field::new("container", utf8_dict(), false),
-            Field::new("image", utf8_dict(), false),
+            Field::new("service", DataType::Utf8, true),
+            Field::new("host", DataType::Utf8, false),
+            Field::new("pod", DataType::Utf8, false),
+            Field::new("container", DataType::Utf8, false),
+            Field::new("image", DataType::Utf8, false),
             Field::new(
                 "time",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
                 false,
             ),
             Field::new("client_addr", DataType::Utf8, true),
@@ -90,11 +92,11 @@ impl BatchBuilder {
         let methods = &["GET", "PUT", "POST", "HEAD", "PATCH", "DELETE"];
         let status = &[200, 204, 400, 503, 403];
 
-        self.service.append(service).unwrap();
-        self.host.append(host).unwrap();
-        self.pod.append(pod).unwrap();
-        self.container.append(container).unwrap();
-        self.image.append(image).unwrap();
+        self.service.append_value(service);
+        self.host.append_value(host);
+        self.pod.append_value(pod);
+        self.container.append_value(container);
+        self.image.append_value(image);
         self.time.append_value(time);
 
         self.client_addr.append_value(format!(
@@ -205,46 +207,87 @@ impl Iterator for Generator {
     }
 }
 
-fn main() {
-    let generator = Generator::new();
-
-    let mut file = File::create("logs.parquet").unwrap();
-    let mut writer = ArrowWriter::try_new(&mut file, generator.schema.clone(), None).unwrap();
-
-    for batch in generator.take(40) {
+fn write_parquet(
+    name: &str,
+    schema: SchemaRef,
+    batches: &[RecordBatch],
+    write_props: WriterProperties,
+) {
+    let mut file = File::create(name).unwrap();
+    let mut writer = ArrowWriter::try_new(&mut file, schema, Some(write_props)).unwrap();
+    for batch in batches {
         writer.write(&batch).unwrap();
     }
     writer.close().unwrap();
+}
 
-    let file = File::open("logs.parquet").unwrap();
+fn main() {
+    let generator = Generator::new();
+    let schema = generator.schema.clone();
+    let batches = generator.take(40).collect::<Vec<_>>();
 
-    let options = ArrowReaderOptions::new().with_page_index(true);
-    let reader =
-        ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)
-            .unwrap();
+    write_parquet(
+        "logs-no-stats.parquet",
+        schema.clone(),
+        &batches,
+        WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build(),
+    );
+    println!("Write logs-no-stats.parquet");
 
-    let chunk_reader = Arc::new(file);
-    for (r_idx, row_group) in reader.metadata().row_groups().iter().enumerate() {
-        for (c_idx, column) in row_group.columns().iter().enumerate() {
-            let page_reader = SerializedPageReader::new(
-                Arc::clone(&chunk_reader),
-                column,
-                row_group.num_rows() as usize,
-                None,
-            )
-            .unwrap();
-            for (p_idx, page) in page_reader.enumerate() {
-                let p = page.unwrap();
-                println!(
-                    "{}:{}:{} Page({},{},{})",
-                    r_idx,
-                    c_idx,
-                    p_idx,
-                    p.page_type(),
-                    p.encoding(),
-                    p.buffer().len()
-                );
-            }
-        }
-    }
+    write_parquet(
+        "logs-chunk-stats.parquet",
+        schema.clone(),
+        &batches,
+        WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build(),
+    );
+    println!("Write logs-chunk-stats.parquet");
+
+    write_parquet(
+        "logs-page-stats.parquet",
+        schema.clone(),
+        &batches,
+        WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build(),
+    );
+    println!("Write logs-page-stats.parquet");
+
+    // let file = File::open("logs.parquet").unwrap();
+
+    // let options = ArrowReaderOptions::new().with_page_index(false);
+    // let reader =
+    //     ParquetRecordBatchReaderBuilder::try_new_with_options(file.try_clone().unwrap(), options)
+    //         .unwrap();
+
+    // let chunk_reader = Arc::new(file);
+    // for (r_idx, row_group) in reader.metadata().row_groups().iter().enumerate() {
+    //     for (c_idx, column) in row_group.columns().iter().enumerate() {
+    //         let page_reader = SerializedPageReader::new(
+    //             Arc::clone(&chunk_reader),
+    //             column,
+    //             row_group.num_rows() as usize,
+    //             None,
+    //         )
+    //         .unwrap();
+    //         for (p_idx, page) in page_reader.enumerate() {
+    //             let p = page.unwrap();
+    //             println!(
+    //                 "{}:{}:{} Page({},{},{})",
+    //                 r_idx,
+    //                 c_idx,
+    //                 p_idx,
+    //                 p.page_type(),
+    //                 p.encoding(),
+    //                 p.buffer().len()
+    //             );
+    //         }
+    //     }
+    // }
 }
